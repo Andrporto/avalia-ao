@@ -35,7 +35,7 @@ const pendentes = () => minhas().filter(e => e.status !== 'enviado');
 /* ---------- inicialização ---------- */
 async function iniciar() {
   u = usuario();
-  if (!u) return telaLogin(app, () => iniciar(), 'Continuar');
+  if (!u || !/^\d{4}$/.test(u.codigo || '')) return telaLogin(app, () => iniciar(), 'Continuar', true);
   const guardado = LS.get('pi_config_' + u.turma, null);
   cfg = guardado; fonteDados = guardado ? 'salvos' : '';
   if (guardado) tela(); else app.replaceChildren(el('div', { class: 'msg' }, 'Carregando grupos…'));

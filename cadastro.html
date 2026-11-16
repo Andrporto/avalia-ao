@@ -30,7 +30,7 @@ function sair() { LS.del('pi_user'); iniciar(); }
 
 async function iniciar() {
   u = usuario();
-  if (!u) return telaLogin(app, () => iniciar(), 'Continuar');
+  if (!u) return telaLogin(app, () => iniciar(), 'Continuar', false);
   app.replaceChildren(el('div', { class: 'msg' }, 'Carregando…'));
   try {
     cfg = await carregarConfig(u.turma);

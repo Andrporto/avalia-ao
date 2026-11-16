@@ -67,14 +67,15 @@ async function carregarConfig(turma) {
 /* ---------- identificação do aluno ---------- */
 function usuario() { return LS.get('pi_user', null); }
 
-function telaLogin(destino, aoEntrar, textoBotao) {
+function telaLogin(destino, aoEntrar, textoBotao, codigoObrigatorio) {
+  if (codigoObrigatorio === undefined) codigoObrigatorio = true;
   const u = usuario() || {};
   const turma = el('select', {},
     el('option', { value: '' }, 'Selecione…'),
     el('option', { value: 'A' }, 'Turma A (1I)'),
     el('option', { value: 'B' }, 'Turma B (2I)'));
   const nome = el('select', {}, el('option', { value: '' }, 'Selecione a turma primeiro'));
-  const codigo = el('input', { type: 'tel', inputmode: 'numeric', maxlength: '4', placeholder: '4 últimos dígitos da matrícula', autocomplete: 'off' });
+  const codigo = el('input', { type: 'tel', inputmode: 'numeric', maxlength: '4', placeholder: codigoObrigatorio ? '4 últimos dígitos da matrícula' : 'Opcional por enquanto', autocomplete: 'off' });
   const msg = el('div', {});
   const preencher = async () => {
     nome.innerHTML = '';
@@ -92,8 +93,9 @@ function telaLogin(destino, aoEntrar, textoBotao) {
   if (u.turma) { turma.value = u.turma; preencher(); codigo.value = u.codigo || ''; }
   const ok = el('button', { class: 'big', onclick: () => {
     msg.innerHTML = '';
-    if (!turma.value || !nome.value || !/^\d{4}$/.test(codigo.value.trim())) {
-      msg.append(el('div', { class: 'msg erro' }, 'Escolha turma e nome e digite os 4 últimos dígitos da matrícula.'));
+    const c = codigo.value.trim();
+    if (!turma.value || !nome.value || (codigoObrigatorio ? !/^\d{4}$/.test(c) : (c && !/^\d{4}$/.test(c)))) {
+      msg.append(el('div', { class: 'msg erro' }, codigoObrigatorio ? 'Escolha turma e nome e digite os 4 últimos dígitos da matrícula.' : 'Escolha turma e nome. O código, se preencher, tem 4 dígitos.'));
       return;
     }
     const a = alunosDe(turma.value).find(x => x.id === nome.value);
@@ -105,7 +107,7 @@ function telaLogin(destino, aoEntrar, textoBotao) {
     el('h2', {}, 'Quem é você?'),
     el('label', {}, 'Turma'), turma,
     el('label', {}, 'Seu nome'), nome,
-    el('label', {}, 'Código (4 últimos dígitos da sua matrícula)'), codigo,
+    el('label', {}, codigoObrigatorio ? 'Código (4 últimos dígitos da sua matrícula)' : 'Código (opcional agora; será pedido na hora de avaliar)'), codigo,
     msg, ok));
 }
 
