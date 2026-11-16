@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2f7d32">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<title>Avaliar apresentações — PI1</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Avaliar apresentações</h1>
+  <p><a class="topo-link" href="index.html">← início</a></p>
+</header>
+<main>
+  <div id="aviso"></div>
+  <div id="app"></div>
+</main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+registrarSW();
+const av = avisoNavegador(); if (av) $('#aviso').append(av);
+const app = $('#app');
+let u = null, cfg = null, evals = LS.get('pi_evals', {});
+let dataSel = null, sincronizando = false, avisoSync = '', fonteDados = '';
+
+const salvar = () => LS.set('pi_evals', evals);
+const chave = gid => u.id + '|' + gid;
+const minhas = () => Object.values(evals).filter(e => e.uid === u.id);
+const pendentes = () => minhas().filter(e => e.status !== 'enviado');
+
+/* ---------- inicialização ---------- */
+async function iniciar() {
+  u = usuario();
+  if (!u) return telaLogin(app, () => iniciar(), 'Continuar');
+  const guardado = LS.get('pi_config_' + u.turma, null);
+  cfg = guardado; fonteDados = guardado ? 'salvos' : '';
+  if (guardado) tela(); else app.replaceChildren(el('div', { class: 'msg' }, 'Carregando grupos…'));
+  await atualizarConfig();
+  sincronizar();
+}
+
+async function atualizarConfig() {
+  try {
+    cfg = await carregarConfig(u.turma); fonteDados = 'agora';
+  } catch (e) { /* sem internet: segue com os dados salvos */ }
+  if (!cfg) {
+    app.replaceChildren(el('div', { class: 'msg erro' }, 'Ainda não carreguei os grupos neste celular e não há internet agora. Conecte-se uma vez (Wi-Fi ou 4G) e abra esta página de novo.'),
+      el('button', { class: 'big', onclick: iniciar }, 'Tentar de novo'));
+    return;
+  }
+  tela();
+}
+
+/* ---------- lista de grupos ---------- */
+function tela() {
+  if (!cfg) return;
+  const nodes = [];
+  nodes.push(el('div', { class: 'card' },
+    el('div', {}, 'Você: ', el('b', {}, u.nome), ' · Turma ', u.turma),
+    el('div', { class: 'muted' }, 'Grupos ' + (fonteDados === 'agora' ? 'atualizados agora' : 'salvos no celular') + ' (' + new Date(cfg.geradoEm).toLocaleString('pt-BR') + ')'),
+    el('div', { style: 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap' },
+      el('button', { class: 'sec pq', onclick: async () => { await atualizarConfig(); } }, 'Atualizar grupos'),
+      el('button', { class: 'sec pq', onclick: () => { LS.del('pi_user'); iniciar(); } }, 'Não sou eu'))));
+
+  const pend = pendentes();
+  const barra = el('div', { class: 'card' });
+  if (pend.length) {
+    barra.append(el('div', {}, '📤 ', el('b', {}, pend.length), ' avaliação(ões) salva(s) no celular, ainda não enviada(s).'),
+      el('div', { class: 'muted' }, navigator.onLine ? 'Enviando automaticamente quando houver sinal.' : 'Sem internet agora — tudo bem, fica salvo.'),
+      el('div', { style: 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap' },
+        el('button', { class: 'pq', onclick: () => sincronizar(true) }, 'Enviar agora'),
+        el('button', { class: 'sec pq', onclick: planoB }, 'Gerar código de envio')));
+  } else if (minhas().length) {
+    barra.append(el('div', {}, '✅ Todas as suas avaliações foram enviadas.'));
+  }
+  if (avisoSync) barra.append(el('div', { class: 'msg erro' }, avisoSync));
+  if (pend.length || minhas().length || avisoSync) nodes.push(barra);
+
+  if (cfg.cadastro !== 'FECHADO') {
+    nodes.push(el('div', { class: 'msg aviso' }, 'O professor ainda não fechou a lista de grupos. Quando fechar, toque em “Atualizar grupos” (com internet).'));
+    app.replaceChildren(...nodes); return;
+  }
+
+  const meuGrupo = cfg.grupos.find(g => g.membros.includes(u.id));
+  if (!meuGrupo) nodes.push(el('div', { class: 'msg aviso' }, 'Você não está em nenhum grupo cadastrado. Fale com o professor.'));
+
+  const datas = [...new Set(cfg.grupos.map(g => g.data || ''))].sort((a, b) => dataKey(a).localeCompare(dataKey(b)));
+  if (!datas.length) { nodes.push(el('div', { class: 'msg aviso' }, 'Nenhum grupo cadastrado nesta turma ainda.')); app.replaceChildren(...nodes); return; }
+  if (!dataSel || !datas.includes(dataSel)) {
+    const h = hojeBR();
+    dataSel = datas.includes(h) ? h : (datas.find(d => dataKey(d) >= dataKey(h)) || datas[0]);
+  }
+  nodes.push(el('div', { class: 'tabs' }, datas.map(d => el('button', { class: d === dataSel ? 'on' : '', onclick: () => { dataSel = d; tela(); } }, d || 'Sem data'))));
+
+  const card = el('div', { class: 'card' });
+  cfg.grupos.filter(g => (g.data || '') === dataSel).sort((a, b) => a.ordem - b.ordem).forEach(g => {
+    const meu = g.membros.includes(u.id);
+    const ev = evals[chave(g.id)];
+    let chip = el('span', { class: 'chip nao' }, 'não avaliado');
+    if (ev) chip = ev.status === 'enviado' ? el('span', { class: 'chip env' }, 'enviado ✓')
+      : ev.status === 'erro' ? el('span', { class: 'chip err' }, 'erro ao enviar')
+      : el('span', { class: 'chip pen' }, 'salvo no celular');
+    let acao;
+    if (meu) acao = el('span', { class: 'muted' }, 'seu grupo');
+    else if (ev && ev.status === 'enviado') acao = '';
+    else acao = el('button', { class: 'pq', onclick: () => formulario(g) }, ev ? 'Editar' : 'Avaliar');
+    card.append(el('div', { class: 'grupo' },
+      el('div', {}, el('div', { class: 't' }, (g.ordem && g.ordem < 999 ? g.ordem + '. ' : '') + g.nome),
+        el('div', { class: 'muted' }, g.titulo || ''),
+        el('div', { class: 'pill' }, g.membros.map(nomeAluno).join(', ')),
+        meu ? '' : el('div', { style: 'margin-top:4px' }, chip),
+        ev && ev.status === 'erro' ? el('div', { class: 'msg erro' }, ev.msg || '') : ''),
+      acao));
+  });
+  nodes.push(card);
+  app.replaceChildren(...nodes);
+}
+
+/* ---------- botões de nota 0–10 ---------- */
+function notaBotoes(inicial) {
+  let valor = inicial == null ? null : inicial;
+  const wrap = el('div', { class: 'notas' });
+  const bs = [];
+  for (let i = 0; i <= 10; i++) {
+    const b = el('button', { type: 'button', onclick: () => { valor = i; pintar(); } }, String(i));
+    bs.push(b); wrap.append(b);
+  }
+  const pintar = () => bs.forEach((b, i) => b.classList.toggle('sel', i === valor));
+  pintar();
+  return { node: wrap, get: () => valor, set: v => { valor = v; pintar(); } };
+}
+
+/* ---------- formulário de avaliação ---------- */
+function formulario(g) {
+  const ev = evals[chave(g.id)] || {};
+  const org = notaBotoes(ev.org), dom = notaBotoes(ev.dom);
+  const com = el('textarea', { maxlength: '300', placeholder: 'Opcional: só o professor vê.' }); com.value = ev.comentario || '';
+  const msg = el('div', {});
+  const inds = g.membros.map(m => {
+    const nb = notaBotoes(ev.ind ? ev.ind[m] : null);
+    const ausente = el('input', { type: 'checkbox' });
+    const linha = el('div', { class: 'ind' });
+    ausente.checked = !!(ev.ind && m in ev.ind && ev.ind[m] === null);
+    const marcar = () => linha.classList.toggle('skip', ausente.checked);
+    ausente.addEventListener('change', marcar);
+    linha.append(el('div', { class: 'nm' }, nomeAluno(m)), nb.node,
+      el('label', { style: 'font-weight:400;display:flex;gap:8px;align-items:center;margin:2px 0 0' }, ausente, 'Não falou / não apresentou'));
+    marcar();
+    return { m, nb, ausente, linha };
+  });
+
+  const gravar = () => {
+    msg.innerHTML = '';
+    if (org.get() == null || dom.get() == null) { msg.append(el('div', { class: 'msg erro' }, 'Dê nota de Organização e de Domínio do grupo.')); return; }
+    const ind = {};
+    for (const i of inds) {
+      if (i.ausente.checked) { ind[i.m] = null; continue; }
+      if (i.nb.get() == null) { msg.append(el('div', { class: 'msg erro' }, 'Falta a nota de ' + nomeAluno(i.m) + ' (ou marque “não falou”).')); i.linha.scrollIntoView({ block: 'center' }); return; }
+      ind[i.m] = i.nb.get();
+    }
+    evals[chave(g.id)] = { uid: u.id, grupoId: g.id, org: org.get(), dom: dom.get(), ind, comentario: com.value.trim(), status: 'pendente', ts: new Date().toISOString() };
+    salvar(); avisoSync = '';
+    tela(); window.scrollTo(0, 0);
+    sincronizar();
+  };
+
+  app.replaceChildren(
+    el('div', { class: 'card' },
+      el('h2', {}, (g.ordem && g.ordem < 999 ? g.ordem + '. ' : '') + g.nome),
+      el('div', { class: 'muted' }, g.titulo || ''),
+      el('label', {}, 'Organização do grupo'), el('div', { class: 'muted' }, 'Sequência clara, tempo, slides legíveis'), org.node,
+      el('label', {}, 'Domínio do conteúdo (grupo)'), el('div', { class: 'muted' }, 'Entende o que fez? Respondeu bem às perguntas?'), dom.node),
+    el('div', { class: 'card' },
+      el('h2', {}, 'Nota individual: postura e desempenho'),
+      el('div', { class: 'muted' }, 'Comunicação, segurança e participação de cada integrante.'),
+      inds.map(i => i.linha)),
+    el('div', { class: 'card' }, el('label', { style: 'margin-top:0' }, 'Comentário'), com, msg),
+    el('div', { class: 'fixo' },
+      el('button', { class: 'sec', onclick: () => { tela(); window.scrollTo(0, 0); } }, 'Cancelar'),
+      el('button', { onclick: gravar }, 'Salvar avaliação')));
+  window.scrollTo(0, 0);
+}
+
+/* ---------- envio ---------- */
+function payload(lista) {
+  return { action: 'avaliacoes', avaliador: { id: u.id, codigo: u.codigo },
+    itens: lista.map(e => ({ grupoId: e.grupoId, org: e.org, dom: e.dom, ind: e.ind, comentario: e.comentario })) };
+}
+
+async function sincronizar(manual) {
+  if (sincronizando) return;
+  const lista = pendentes().filter(e => e.status === 'pendente');
+  if (!lista.length) { if (manual) tela(); return; }
+  if (!navigator.onLine && !manual) return;
+  sincronizando = true;
+  try {
+    const r = await apiPost(payload(lista));
+    if (!r.ok) { avisoSync = r.erro || 'Não foi possível enviar.'; if (/código/i.test(avisoSync)) corrigirCodigo(); }
+    else {
+      avisoSync = '';
+      r.resultados.forEach(x => {
+        const e = evals[chave(x.grupoId)];
+        if (!e) return;
+        if (x.status === 'ok' || x.status === 'duplicado') { e.status = 'enviado'; e.msg = ''; }
+        else { e.status = 'erro'; e.msg = x.msg || 'Erro ao enviar.'; }
+      });
+      salvar();
+    }
+  } catch (err) {
+    if (manual) avisoSync = 'Sem conexão com o servidor agora. Suas notas continuam salvas; tente de novo com sinal.';
+  }
+  sincronizando = false;
+  tela();
+}
+
+function corrigirCodigo() {
+  const novo = prompt('O código não confere. Digite os 4 últimos dígitos da sua matrícula:');
+  if (novo && /^\d{4}$/.test(novo.trim())) { u.codigo = novo.trim(); LS.set('pi_user', u); avisoSync = ''; setTimeout(() => sincronizar(true), 50); }
+}
+
+window.addEventListener('online', () => sincronizar());
+setInterval(() => { if (u && navigator.onLine && pendentes().some(e => e.status === 'pendente')) sincronizar(); }, 20000);
+
+/* ---------- plano B: código para mandar por WhatsApp ---------- */
+function planoB() {
+  const lista = pendentes().filter(e => e.status === 'pendente');
+  const codigo = codificar(payload(lista));
+  const area = el('textarea', { class: 'codigo', readonly: true, rows: '6' }); area.value = codigo;
+  const fechar = () => { tela(); };
+  const wa = (typeof WHATSAPP_PROFESSOR === 'string' && WHATSAPP_PROFESSOR)
+    ? el('a', { class: 'btn big', href: 'https://wa.me/' + WHATSAPP_PROFESSOR + '?text=' + encodeURIComponent(codigo), target: '_blank', rel: 'noopener' }, 'Enviar ao professor pelo WhatsApp') : '';
+  app.replaceChildren(el('div', { class: 'card' },
+    el('h2', {}, 'Código de envio'),
+    el('p', { class: 'muted' }, 'Se o envio automático não funcionar, copie este código e mande ao professor (WhatsApp ou e-mail). Ele importa tudo de uma vez.'),
+    area,
+    el('button', { class: 'big', onclick: async () => {
+      try { await navigator.clipboard.writeText(codigo); } catch (e) { area.select(); document.execCommand && document.execCommand('copy'); }
+    } }, 'Copiar código'),
+    wa,
+    el('button', { class: 'sec big', onclick: fechar }, 'Voltar')));
+}
+
+iniciar();
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "Avaliação das apresentações — PI1",
+  "short_name": "Avaliação PI1",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f8f6",
+  "theme_color": "#2f7d32",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

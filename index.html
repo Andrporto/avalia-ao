@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2f7d32">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<title>Avaliação das apresentações — PI1</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Avaliação das apresentações</h1>
+  <p>Projeto Integrador I · IF Baiano, Campus Governador Mangabeira</p>
+</header>
+<main>
+  <div id="aviso"></div>
+  <div class="card">
+    <h2>1. Cadastre seu grupo</h2>
+    <p class="muted">Um integrante de cada grupo faz o cadastro, com internet, <b>antes</b> da apresentação. Depois que o professor fechar a lista, não dá mais para mudar.</p>
+    <a class="btn big" href="cadastro.html">Cadastrar / editar meu grupo</a>
+  </div>
+  <div class="card">
+    <h2>2. Avalie as apresentações</h2>
+    <p class="muted">Abra esta página <b>na véspera, com internet</b>, para carregar os grupos no seu celular. Na sala funciona sem internet: as notas ficam salvas e são enviadas sozinhas quando houver sinal.</p>
+    <a class="btn big" href="avaliar.html">Avaliar apresentações</a>
+  </div>
+  <div class="card">
+    <h2>Seu celular está pronto?</h2>
+    <div id="status" class="muted">Verificando…</div>
+    <p class="muted" style="margin-top:10px">Dica: no menu do navegador escolha <b>Adicionar à tela inicial</b>. O site vira um ícone e fica mais confiável offline.</p>
+  </div>
+  <p class="muted"><a href="importar.html">Professor: importar códigos de envio</a></p>
+</main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+registrarSW();
+const av = avisoNavegador(); if (av) $('#aviso').append(av);
+(async () => {
+  const s = $('#status');
+  const linhas = [];
+  let sw = false;
+  try { sw = 'serviceWorker' in navigator && !!(await navigator.serviceWorker.getRegistration()); } catch (e) {}
+  linhas.push(sw ? '✅ Site salvo para uso offline.' : '⏳ Ainda salvando o site para uso offline (recarregue com internet).');
+  const u = usuario();
+  const cfg = u && LS.get('pi_config_' + u.turma, null);
+  if (cfg) linhas.push('✅ Grupos da Turma ' + u.turma + ' carregados' + (cfg.cadastro === 'FECHADO' ? '.' : ' (lista ainda não fechada pelo professor).'));
+  else linhas.push('⚠️ Grupos ainda não carregados: abra “Avaliar apresentações” com internet.');
+  const pend = Object.values(LS.get('pi_evals', {})).filter(x => x.status !== 'enviado').length;
+  if (pend) linhas.push('📤 ' + pend + ' avaliação(ões) aguardando envio.');
+  s.replaceChildren(...linhas.map(t => el('div', {}, t)));
+})();
+</script>
+</body>
+</html>

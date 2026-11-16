@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2f7d32">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<title>Cadastro de grupo — PI1</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Cadastro do grupo</h1>
+  <p><a class="topo-link" href="index.html">← início</a></p>
+</header>
+<main>
+  <div id="aviso"></div>
+  <div id="app"></div>
+</main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+registrarSW();
+const av = avisoNavegador(); if (av) $('#aviso').append(av);
+const app = $('#app');
+let u = null, cfg = null;
+
+function sair() { LS.del('pi_user'); iniciar(); }
+
+async function iniciar() {
+  u = usuario();
+  if (!u) return telaLogin(app, () => iniciar(), 'Continuar');
+  app.replaceChildren(el('div', { class: 'msg' }, 'Carregando…'));
+  try {
+    cfg = await carregarConfig(u.turma);
+  } catch (e) {
+    app.replaceChildren(el('div', { class: 'msg erro' }, 'Não consegui carregar (' + (e.message || e) + '). O cadastro precisa de internet. Tente de novo.'),
+      el('button', { class: 'big', onclick: iniciar }, 'Tentar de novo'));
+    return;
+  }
+  formulario();
+}
+
+function formulario() {
+  const meu = cfg.grupos.find(g => g.membros.includes(u.id));
+  const aberto = cfg.cadastro === 'ABERTO';
+  const ocupados = {};
+  cfg.grupos.forEach(g => g.membros.forEach(m => { if (!meu || g.id !== meu.id) ocupados[m] = g.nome; }));
+
+  const topo = el('div', { class: 'card' },
+    el('div', {}, 'Você: ', el('b', {}, u.nome), ' · Turma ', u.turma),
+    el('button', { class: 'sec pq', style: 'margin-top:8px', onclick: sair }, 'Não sou eu'));
+  const nodes = [topo];
+
+  if (!aberto) {
+    nodes.push(el('div', { class: 'msg aviso' }, 'O cadastro desta turma foi encerrado pelo professor.'));
+    if (meu) nodes.push(resumo(meu));
+    app.replaceChildren(...nodes);
+    return;
+  }
+
+  const nome = el('input', { type: 'text', maxlength: '60', placeholder: 'Ex.: Equipe Alfa', value: meu ? meu.nome : '' });
+  const titulo = el('input', { type: 'text', maxlength: '120', placeholder: 'Nome do projeto', value: meu ? meu.titulo : '' });
+  const busca = el('input', { type: 'search', placeholder: 'Buscar colega…' });
+  const marcados = new Set(meu ? meu.membros : [u.id]);
+  const contador = el('div', { class: 'muted' });
+  const lista = el('div', { class: 'lista' });
+  const msg = el('div', {});
+
+  const itens = cfg.alunos.map(a => {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = marcados.has(a.id);
+    const sou = a.id === u.id, ocup = ocupados[a.id];
+    if (sou || ocup) cb.disabled = true;
+    cb.addEventListener('change', () => { cb.checked ? marcados.add(a.id) : marcados.delete(a.id); atualizar(); });
+    const lb = el('label', { class: ocup ? 'off' : '' }, cb, el('span', {}, a.nome,
+      sou ? el('div', { class: 'pill' }, 'você (obrigatório)') : '',
+      ocup ? el('div', { class: 'pill' }, 'já está no grupo “' + ocup + '”') : ''));
+    lb.dataset.n = a.nome.toLowerCase();
+    return lb;
+  });
+  lista.append(...itens);
+  function atualizar() { contador.textContent = marcados.size + ' integrante(s) selecionado(s) (de ' + cfg.minMembros + ' a ' + cfg.maxMembros + ')'; }
+  atualizar();
+  busca.addEventListener('input', () => {
+    const q = busca.value.trim().toLowerCase();
+    itens.forEach(i => i.classList.toggle('hidden', q && !i.dataset.n.includes(q)));
+  });
+
+  const enviar = el('button', { class: 'big', onclick: async () => {
+    msg.innerHTML = '';
+    if (!nome.value.trim()) { msg.append(el('div', { class: 'msg erro' }, 'Dê um nome ao grupo.')); return; }
+    if (marcados.size < cfg.minMembros || marcados.size > cfg.maxMembros) {
+      msg.append(el('div', { class: 'msg erro' }, 'O grupo precisa ter de ' + cfg.minMembros + ' a ' + cfg.maxMembros + ' integrantes.')); return;
+    }
+    enviar.disabled = true; enviar.textContent = 'Enviando…';
+    try {
+      const r = await apiPost({ action: 'cadastro', id: u.id, codigo: u.codigo, grupoId: meu ? meu.id : null,
+        nome: nome.value.trim(), titulo: titulo.value.trim(), membros: [...marcados] });
+      if (!r.ok) throw new Error(r.erro || 'Erro desconhecido.');
+      msg.append(el('div', { class: 'msg ok' }, r.atualizado ? 'Grupo atualizado! ✅' : 'Grupo cadastrado! ✅'));
+      cfg = await carregarConfig(u.turma);
+      setTimeout(formulario, 1200);
+    } catch (e) {
+      msg.append(el('div', { class: 'msg erro' }, String(e.message || e)));
+      enviar.disabled = false; enviar.textContent = meu ? 'Salvar alterações' : 'Cadastrar grupo';
+    }
+  } }, meu ? 'Salvar alterações' : 'Cadastrar grupo');
+
+  nodes.push(el('div', { class: 'card' },
+    el('h2', {}, meu ? 'Seu grupo (você pode editar até o professor fechar)' : 'Novo grupo'),
+    el('label', {}, 'Nome do grupo'), nome,
+    el('label', {}, 'Título do projeto'), titulo,
+    el('label', {}, 'Integrantes (marque todos, incluindo você)'), busca, el('div', { style: 'height:6px' }), lista, contador,
+    msg, enviar));
+  app.replaceChildren(...nodes);
+}
+
+function resumo(g) {
+  return el('div', { class: 'card' }, el('h2', {}, 'Seu grupo: ' + g.nome),
+    el('div', { class: 'muted' }, g.titulo || ''),
+    el('ul', {}, g.membros.map(id => el('li', {}, nomeAluno(id)))));
+}
+iniciar();
+</script>
+</body>
+</html>
