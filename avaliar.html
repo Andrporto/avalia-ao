@@ -25,17 +25,25 @@ registrarSW();
 const av = avisoNavegador(); if (av) $('#aviso').append(av);
 const app = $('#app');
 let u = null, cfg = null, evals = LS.get('pi_evals', {});
+const PROF = location.hash === '#prof';
 let dataSel = null, sincronizando = false, avisoSync = '', fonteDados = '';
 
 const salvar = () => LS.set('pi_evals', evals);
 const chave = gid => u.id + '|' + gid;
 const minhas = () => Object.values(evals).filter(e => e.uid === u.id);
 const pendentes = () => minhas().filter(e => e.status !== 'enviado');
+const turmaDe = e => String(e.grupoId).charAt(1);
 
 /* ---------- inicialização ---------- */
 async function iniciar() {
-  u = usuario();
-  if (!u || !/^\d{4}$/.test(u.codigo || '')) return telaLogin(app, () => iniciar(), 'Continuar', true);
+  if (PROF) {
+    document.querySelector('h1').textContent = 'Avaliar apresentações · Professor';
+    u = LS.get('pi_prof', null);
+    if (!u || !u.codigo || !u.turma) return loginProf();
+  } else {
+    u = usuario();
+    if (!u || !/^\d{4}$/.test(u.codigo || '')) return telaLogin(app, () => iniciar(), 'Continuar', true);
+  }
   const guardado = LS.get('pi_config_' + u.turma, null);
   cfg = guardado; fonteDados = guardado ? 'salvos' : '';
   if (guardado) tela(); else app.replaceChildren(el('div', { class: 'msg' }, 'Carregando grupos…'));
@@ -55,16 +63,35 @@ async function atualizarConfig() {
   tela();
 }
 
+/* ---------- acesso do professor ---------- */
+function loginProf() {
+  const t = LS.get('pi_prof', {}) || {};
+  const turma = el('select', {}, el('option', { value: 'A' }, 'Turma A (1I)'), el('option', { value: 'B' }, 'Turma B (2I)'));
+  turma.value = t.turma || 'A';
+  const cod = el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: 'Código do professor' });
+  const msg = el('div', {});
+  app.replaceChildren(el('div', { class: 'card' },
+    el('h2', {}, 'Acesso do professor'),
+    el('label', {}, 'Turma'), turma, el('label', {}, 'Código (aba Config da planilha)'), cod, msg,
+    el('button', { class: 'big', onclick: () => {
+      if (!cod.value.trim()) { msg.replaceChildren(el('div', { class: 'msg erro' }, 'Digite o código.')); return; }
+      LS.set('pi_prof', { id: 'PROF', nome: 'Professor', turma: turma.value, codigo: cod.value.trim(), prof: true });
+      iniciar();
+    } }, 'Entrar')));
+}
+
 /* ---------- lista de grupos ---------- */
 function tela() {
   if (!cfg) return;
   const nodes = [];
   nodes.push(el('div', { class: 'card' },
-    el('div', {}, 'Você: ', el('b', {}, u.nome), ' · Turma ', u.turma),
+    el('div', {}, PROF ? 'Modo professor' : 'Você: ', PROF ? '' : el('b', {}, u.nome), ' · Turma ', u.turma),
     el('div', { class: 'muted' }, 'Grupos ' + (fonteDados === 'agora' ? 'atualizados agora' : 'salvos no celular') + ' (' + new Date(cfg.geradoEm).toLocaleString('pt-BR') + ')'),
     el('div', { style: 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap' },
       el('button', { class: 'sec pq', onclick: async () => { await atualizarConfig(); } }, 'Atualizar grupos'),
-      el('button', { class: 'sec pq', onclick: () => { LS.del('pi_user'); iniciar(); } }, 'Não sou eu'))));
+      PROF ? el('button', { class: 'sec pq', onclick: () => { u.turma = u.turma === 'A' ? 'B' : 'A'; LS.set('pi_prof', u); dataSel = null; avisoSync = ''; iniciar(); } }, 'Trocar para turma ' + (u.turma === 'A' ? 'B' : 'A')) : '',
+      PROF ? el('button', { class: 'sec pq', onclick: () => { LS.del('pi_prof'); iniciar(); } }, 'Sair')
+        : el('button', { class: 'sec pq', onclick: () => { LS.del('pi_user'); iniciar(); } }, 'Não sou eu'))));
 
   const pend = pendentes();
   const barra = el('div', { class: 'card' });
@@ -80,13 +107,13 @@ function tela() {
   if (avisoSync) barra.append(el('div', { class: 'msg erro' }, avisoSync));
   if (pend.length || minhas().length || avisoSync) nodes.push(barra);
 
-  if (cfg.cadastro !== 'FECHADO') {
+  if (!PROF && cfg.cadastro !== 'FECHADO') {
     nodes.push(el('div', { class: 'msg aviso' }, 'O professor ainda não fechou a lista de grupos. Quando fechar, toque em “Atualizar grupos” (com internet).'));
     app.replaceChildren(...nodes); return;
   }
 
   const meuGrupo = cfg.grupos.find(g => g.membros.includes(u.id));
-  if (!meuGrupo) nodes.push(el('div', { class: 'msg aviso' }, 'Você não está em nenhum grupo cadastrado. Fale com o professor.'));
+  if (!PROF && !meuGrupo) nodes.push(el('div', { class: 'msg aviso' }, 'Você não está em nenhum grupo cadastrado. Fale com o professor.'));
 
   const datas = [...new Set(cfg.grupos.map(g => g.data || ''))].sort((a, b) => dataKey(a).localeCompare(dataKey(b)));
   if (!datas.length) { nodes.push(el('div', { class: 'msg aviso' }, 'Nenhum grupo cadastrado nesta turma ainda.')); app.replaceChildren(...nodes); return; }
@@ -186,8 +213,8 @@ function formulario(g) {
 }
 
 /* ---------- envio ---------- */
-function payload(lista) {
-  return { action: 'avaliacoes', avaliador: { id: u.id, codigo: u.codigo },
+function payload(lista, turma) {
+  return { action: 'avaliacoes', avaliador: PROF ? { id: u.id, codigo: u.codigo, turma } : { id: u.id, codigo: u.codigo },
     itens: lista.map(e => ({ grupoId: e.grupoId, org: e.org, dom: e.dom, ind: e.ind, comentario: e.comentario })) };
 }
 
@@ -197,10 +224,11 @@ async function sincronizar(manual) {
   if (!lista.length) { if (manual) tela(); return; }
   if (!navigator.onLine && !manual) return;
   sincronizando = true;
+  const lotes = PROF ? ['A', 'B'].map(t => [t, lista.filter(e => turmaDe(e) === t)]).filter(x => x[1].length) : [[null, lista]];
   try {
-    const r = await apiPost(payload(lista));
-    if (!r.ok) { avisoSync = r.erro || 'Não foi possível enviar.'; if (/código/i.test(avisoSync)) corrigirCodigo(); }
-    else {
+    for (const [t, itens] of lotes) {
+      const r = await apiPost(payload(itens, t));
+      if (!r.ok) { avisoSync = r.erro || 'Não foi possível enviar.'; if (/código/i.test(avisoSync)) corrigirCodigo(); break; }
       avisoSync = '';
       r.resultados.forEach(x => {
         const e = evals[chave(x.grupoId)];
@@ -218,8 +246,9 @@ async function sincronizar(manual) {
 }
 
 function corrigirCodigo() {
-  const novo = prompt('O código não confere. Digite os 4 últimos dígitos da sua matrícula:');
-  if (novo && /^\d{4}$/.test(novo.trim())) { u.codigo = novo.trim(); LS.set('pi_user', u); avisoSync = ''; setTimeout(() => sincronizar(true), 50); }
+  const novo = prompt(PROF ? 'O código do professor não confere. Digite de novo:' : 'O código não confere. Digite os 4 últimos dígitos da sua matrícula:');
+  const valido = novo && (PROF ? novo.trim() : /^\d{4}$/.test(novo.trim()));
+  if (valido) { u.codigo = novo.trim(); LS.set(PROF ? 'pi_prof' : 'pi_user', u); avisoSync = ''; setTimeout(() => sincronizar(true), 50); }
 }
 
 window.addEventListener('online', () => sincronizar());
@@ -227,8 +256,8 @@ setInterval(() => { if (u && navigator.onLine && pendentes().some(e => e.status 
 
 /* ---------- plano B: código para mandar por WhatsApp ---------- */
 function planoB() {
-  const lista = pendentes().filter(e => e.status === 'pendente');
-  const codigo = codificar(payload(lista));
+  const lista = pendentes().filter(e => e.status === 'pendente' && (!PROF || turmaDe(e) === u.turma));
+  const codigo = codificar(payload(lista, u.turma));
   const area = el('textarea', { class: 'codigo', readonly: true, rows: '6' }); area.value = codigo;
   const fechar = () => { tela(); };
   const wa = (typeof WHATSAPP_PROFESSOR === 'string' && WHATSAPP_PROFESSOR)
